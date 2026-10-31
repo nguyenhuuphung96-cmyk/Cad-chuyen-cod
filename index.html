@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Đọc DXF → G-code dập lưới</title>
+<meta name="description" content="Đọc bản vẽ AutoCAD DXF và tạo mã G-code dập lưới, chạy ngay trên máy hoặc điện thoại, không cần mạng.">
+<meta name="theme-color" content="#1d6fe8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171b" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="DXF→G-code">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f24;--mut:#667085;--ac:#1d6fe8;--bd:#d9dee5;--c0:#1d6fe8;--c1:#e8741d;--wn:#b54708;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14171b;--card:#1e2329;--tx:#eceff3;--mut:#9aa4b2;--ac:#5b9bff;--bd:#323a44;--c0:#5b9bff;--c1:#ff9a4d;--wn:#f5a54a;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#14171b;--card:#1e2329;--tx:#eceff3;--mut:#9aa4b2;--ac:#5b9bff;--bd:#323a44;--c0:#5b9bff;--c1:#ff9a4d;--wn:#f5a54a;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0 auto;max-width:900px;padding:14px;background:var(--bg);color:var(--tx);font:15px/1.45 -apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+h1{font-size:20px;margin:4px 0 12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:12px;margin-bottom:12px}
+.card h2{font-size:15px;margin:0 0 8px;color:var(--mut)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+label{display:block;font-size:13px;color:var(--mut)}
+input[type=text],input[type=number],select{width:100%;font-size:16px;padding:7px 9px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);margin-top:2px}
+button{font-size:15px;padding:9px 14px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);cursor:pointer}
+button.p{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}
+.hint{font-size:12.5px;color:var(--mut);margin-top:6px}
+.err{color:#d92d20;font-size:14px;margin-top:8px}
+.ok{color:#1a9d4b;font-size:14px;margin-top:8px}
+#dl label{display:inline-block;margin:0 14px 6px 0;font-size:14px;color:var(--tx)}
+#dl input{margin-right:5px}
+textarea{width:100%;height:320px;font:14px/1.35 Consolas,"Courier New",monospace;padding:8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)}
+svg{width:100%;height:auto;max-height:440px;display:block;background:var(--bg);border:1px solid var(--bd);border-radius:8px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.c0{fill:var(--c0);fill-opacity:.45;stroke:var(--c0)}
+.c1{fill:var(--c1);fill-opacity:.45;stroke:var(--c1)}
+.warn{color:var(--wn);font-size:14px;margin-top:8px}
+</style>
+</head>
+<body>
+<h1>Đọc bản vẽ DXF → mã G-code dập lưới</h1>
+
+<div class="card"><h2>1. Chọn bản vẽ AutoCAD (.dxf)</h2>
+<div class="row" style="margin-top:0"><input type="file" id="f"><button id="sample">Mẫu lỗ tròn</button><button id="sample2">Mẫu rãnh dài</button><button id="sample3">Mẫu nhiều ô</button></div>
+<div class="hint">Trong AutoCAD: lệnh <b>SAVEAS</b> → chọn kiểu <b>AutoCAD DXF</b> (bản ASCII). File .dwg không đọc trực tiếp được. App đọc: hình tròn (CIRCLE), <b>rãnh dài</b> và <b>chữ nhật</b> ghép từ đường thẳng, cung tròn hoặc polyline; cũng đọc được hình nằm trong block (INSERT). Rãnh phải là đường khép kín — nếu còn hở đầu nối thì dùng lệnh JOIN hoặc PEDIT trong AutoCAD trước khi lưu.</div>
+<div id="msg"></div>
+<div id="dwg"></div></div>
+
+<div class="card"><h2>2. Lỗ cần dập (chọn theo loại hình)</h2><div id="dl" class="hint">Chưa có bản vẽ.</div>
+<div class="hint">Lỗ tròn và rãnh dài được tích sẵn. Chữ nhật thường là đường bao tấm nên để trống — tích vào nếu đó đúng là lỗ cần dập.</div></div>
+
+<div class="card"><h2>Tách theo ô (một tấm có nhiều cụm lỗ)</h2>
+<label style="color:var(--tx);font-size:15px"><input type="checkbox" id="panelOn" checked> Dập xong trọn một ô rồi mới sang ô khác</label>
+<div class="grid" style="margin-top:8px">
+<div><label>Cách chia ô</label><select id="pmode"><option value="auto">Tự nhận theo khoảng hở</option><option value="grid">Tự điền số ô ngang × dọc</option></select></div>
+<div><label>Số ô ngang (X)</label><input type="number" id="pnx" value="3" min="1" step="1" inputmode="numeric"></div>
+<div><label>Số ô dọc (Y)</label><input type="number" id="pny" value="2" min="1" step="1" inputmode="numeric"></div>
+<div><label>Hở mấy lần bước lỗ thì tính là ô khác</label><input type="number" id="pgap" value="2.5" min="1.2" step="0.1" inputmode="decimal"></div>
+<div><label>Thứ tự chạy các ô</label><select id="porder">
+<option value="near">Ô nào gần nhất thì chạy trước (ít di chuyển)</option>
+<option value="bt-snake">Dưới → trên, đảo chiều xen kẽ</option>
+<option value="bt">Dưới → trên, hàng nào cũng từ trái</option>
+<option value="tb-snake">Trên → xuống, đảo chiều xen kẽ</option>
+<option value="tb">Trên → xuống, hàng nào cũng từ trái</option>
+</select></div>
+<div><label>Mã chèn giữa hai ô (nếu máy cần)</label><input type="text" id="mpanel" value="" placeholder="để trống nếu không cần"></div>
+</div>
+<div class="hint">Mỗi ô chạy trọn vẹn: hết lỗ trong ô thì ra <b>mã cuối cột</b> (M109), xong mới G0 sang ô mới. Khuôn chùm cũng chỉ xếp trong từng ô, không bao giờ vắt qua hai ô. Số ô nhận được sẽ khoanh khung và đánh số ở bước 4 — xem hình đó để kiểm tra có đúng ý không; nếu ô bị gộp hay bị cắt vụn thì chỉnh ô “hở mấy lần bước lỗ” hoặc chuyển sang tự điền số ô.</div>
+<div class="hint"><b>Ô gần nhất chạy trước</b>: ô đầu tiên vẫn bắt đầu ở góc dưới trái (G0 X0 Y0, rồi Y đi lên) đúng như bạn đang dùng; dập xong một ô, máy nhảy tới ô có lỗ gần đầu dập nhất và vào ô đó từ phía gần nhất nên đỡ chạy không. Muốn ô nào cũng bắt đầu từ góc dưới trái thì chọn một trong các kiểu cố định bên dưới. Quãng chạy tổng cộng hiện ở bước 4 để bạn so sánh giữa các kiểu.</div></div>
+
+<div class="card"><h2>Khuôn chùm (dập nhiều lỗ một nhát)</h2>
+<label style="color:var(--tx);font-size:15px"><input type="checkbox" id="dieOn" checked> Dùng khuôn chùm</label>
+<div class="grid" style="margin-top:8px">
+<div><label>X = ? Kim</label><input type="number" id="nc" value="2" min="1" step="1" inputmode="numeric"></div>
+<div><label>Y = ? Kim</label><input type="number" id="nr" value="2" min="1" step="1" inputmode="numeric"></div>
+<div><label>Hình khuôn (cột phải so với lỗ trái dưới cùng)</label><select id="dvar"><option value="A">Lỗ phải nằm thấp hơn (như bản vẽ bạn gửi)</option><option value="B">Lỗ phải nằm cao hơn</option></select></div>
+<div><label>Điểm chuẩn khi dập (X, Y trong mã)</label><select id="dref"><option value="anchor">Lỗ trái dưới cùng của khuôn</option><option value="center">Tâm của khuôn</option></select></div>
+</div>
+<div class="hint">X = 2 kim, Y = 2 kim là khuôn 4 kim so le như bạn gửi. Mỗi vị trí khuôn chỉ ra một dòng G0 + một lệnh dập. Lỗ nào không đủ chỗ cho cả khuôn (sát mép) sẽ được bỏ qua và tô đỏ để bạn thấy.</div></div>
+
+<div class="card"><h2>3. Cài đặt</h2>
+<div class="grid">
+<div><label>Gốc toạ độ (X0 Y0)</label><select id="origin"><option value="first">Lỗ đầu tiên = X0 Y0</option><option value="corner">Góc cụm lỗ = X0 Y0 (không bao giờ có số âm)</option><option value="abs">Giữ nguyên toạ độ bản vẽ</option></select></div>
+<div><label>Trục Y của máy</label><select id="ysign"><option value="up">Y+ đi lên (giống bản vẽ)</option><option value="down">Y+ đi xuống (từ trên xuống là dương)</option></select></div>
+<div><label>Trục X của máy</label><select id="xsign"><option value="right">X+ sang phải (giống bản vẽ)</option><option value="left">X+ sang trái</option></select></div>
+<div><label>Gom cột: lệch X cho phép (mm)</label><input type="number" id="tol" value="0.5" step="0.1" inputmode="decimal"></div>
+<div><label>Thứ tự cột</label><select id="xdir"><option value="asc">X nhỏ → X lớn</option><option value="desc">X lớn → X nhỏ</option></select></div>
+<div><label>Cột đầu dập theo chiều</label><select id="sdir"><option value="up">Đi lên trên bản vẽ</option><option value="down">Đi xuống dưới bản vẽ</option></select></div>
+<div><label>Các cột tiếp theo</label><select id="snake"><option value="snake">Đảo chiều xen kẽ (như file mẫu)</option><option value="same">Luôn cùng chiều cột đầu</option></select></div>
+<div><label>Nhân toạ độ (đổi đơn vị, mặc định 1)</label><input type="number" id="scale" value="1" step="any" inputmode="decimal"></div>
+<div><label>Lệnh di chuyển</label><input type="text" id="go" value="G0"></div>
+<div><label>Mã đầu cột</label><input type="text" id="m1" value="M108"></div>
+<div><label>Mã dập mỗi lỗ</label><input type="text" id="m2" value="M102"></div>
+<div><label>Mã cuối cột</label><input type="text" id="m3" value="M109"></div>
+<div><label>Khi chọn nhiều loại lỗ</label><select id="split"><option value="split">Tách theo từng loại (đổi khuôn)</option><option value="mix">Gộp chung một chương trình</option></select></div>
+<div><label>Mã đổi khuôn (chèn giữa các loại)</label><input type="text" id="mtool" value="" placeholder="ví dụ T02"></div>
+<div><label>Tên file tải về</label><input type="text" id="fname" value="dapluoi"></div>
+<div><label>Đuôi file</label><select id="fext"><option value=".txt">.txt (văn bản thường)</option><option value=".tap">.tap</option><option value=".nc">.nc</option><option value=".cnc">.cnc</option><option value=".iso">.iso</option><option value=".prg">.prg</option></select></div>
+<div><label>&nbsp;</label><label style="color:var(--tx);font-size:15px"><input type="checkbox" id="m30"> Thêm M30 cuối chương trình</label></div>
+</div>
+<div class="hint">Mỗi cột: <b>G0 X.. Y..</b> → mã đầu cột → mã dập; các lỗ sau: <b>G0 X.. Y..</b> → mã dập; hết cột: mã cuối cột. Giống file dapluoi.tap bạn gửi.</div>
+<div class="hint"><b>Trục Y của máy</b>: bản vẽ CAD có Y đi lên, nhiều máy dập lại tính Y+ theo chiều đi xuống. Nếu bạn dập từ trên xuống mà muốn số dương (X0 Y0 rồi Y16, Y32…) thì chọn <b>Y+ đi xuống</b>. Kèm <b>Gốc toạ độ = Góc cụm lỗ</b> thì cả chương trình không bao giờ có số âm.</div></div>
+
+<div class="card"><h2>4. Xem trước thứ tự dập</h2><div id="stat" class="hint"></div><div id="pv"></div>
+<div class="hint">Vòng xanh lá = lần dập đầu tiên, vòng đỏ = lần dập cuối, chấm trắng = vị trí khuôn (điểm chuẩn). Hai màu xen kẽ = các dải khuôn; lỗ tô đỏ = lỗ dư không đủ chỗ cho khuôn. Khung nét đứt đánh số “ô 1, ô 2…” = từng ô lưới, chạy theo đúng thứ tự đánh số đó.</div></div>
+
+<div class="card"><h2>5. Mã G-code</h2>
+<textarea id="out" spellcheck="false" placeholder="Chọn bản vẽ để tạo mã..."></textarea>
+<div class="row"><button class="p" id="dlbtn">Tải file .txt</button><button id="share" style="display:none">Gửi / Chia sẻ</button><button id="copy">Sao chép</button><span id="cm" class="hint"></span></div>
+<div class="hint">File xuất ra là văn bản thường, mở bằng Notepad được. Muốn đuôi khác (.tap, .nc…) thì đổi ở ô <b>Đuôi file</b> bước 3. Trên điện thoại: <b>Gửi / Chia sẻ</b> để đưa file sang Zalo, mail, USB-OTG… <b>Sao chép</b> để dán vào nơi khác.</div></div>
+
+<script>
+/*CORE*/
+function num(a,def){if(!a||!a.length)return def||0;var n=parseFloat(a[0]);return isNaN(n)?(def||0):n}
+function parseDXF(text){
+  var L=text.split(/\r?\n/),P=[],i;
+  for(i=0;i+1<L.length;i+=2){var c=parseInt(L[i].trim(),10);if(isNaN(c))continue;P.push([c,L[i+1].trim()])}
+  var sec='',expect=false,ents=[],blocks={},curBlock=null,cur=null;
+  function flush(){
+    if(!cur)return;
+    if(sec==='ENTITIES')ents.push(cur);
+    else if(sec==='BLOCKS'){
+      if(cur.type==='BLOCK'){curBlock={name:cur.g[2]?cur.g[2][0]:'',bx:num(cur.g[10]),by:num(cur.g[20]),ents:[]};blocks[curBlock.name]=curBlock}
+      else if(cur.type==='ENDBLK'){curBlock=null}
+      else if(curBlock)curBlock.ents.push(cur);
+    }
+    cur=null;
+  }
+  for(i=0;i<P.length;i++){
+    var c=P[i][0],v=P[i][1];
+    if(c===0){
+      flush();
+      if(v==='SECTION'){expect=true;continue}
+      if(v==='ENDSEC'){sec='';continue}
+      if(v==='EOF')break;
+      cur={type:v,g:{},s:[]};
+    }else if(expect&&c===2){sec=v;expect=false}
+    else if(cur){(cur.g[c]=cur.g[c]||[]).push(v);cur.s.push([c,v])}
+  }
+  flush();
+  return {ents:ents,blocks:blocks};
+}
+function mul(A,B){return [A[0]*B[0]+A[2]*B[1],A[1]*B[0]+A[3]*B[1],A[0]*B[2]+A[2]*B[3],A[1]*B[2]+A[3]*B[3],A[0]*B[4]+A[2]*B[5]+A[4],A[1]*B[4]+A[3]*B[5]+A[5]]}
+function collect(ents,M,depth,blocks,out,st){
+  for(var i=0;i<ents.length;i++){
+    var e=ents[i],g=e.g,t=e.type;
+    if(t==='CIRCLE'||t==='POINT'){
+      var x=num(g[10]),y=num(g[20]);
+      var r=t==='CIRCLE'?num(g[40])*Math.sqrt(Math.abs(M[0]*M[3]-M[1]*M[2])):0;
+      out.push({x:M[0]*x+M[2]*y+M[4],y:M[1]*x+M[3]*y+M[5],r:r,pt:t==='POINT',layer:g[8]?g[8][0]:''});
+    }else if(t==='INSERT'){
+      var blk=blocks[g[2]?g[2][0]:''];
+      if(!blk||depth>=4){st.other++;continue}
+      var ix=num(g[10]),iy=num(g[20]),sx=g[41]?num(g[41],1):1,sy=g[42]?num(g[42],1):1,rot=num(g[50])*Math.PI/180;
+      var cols=Math.max(1,Math.round(num(g[70],1))),rows=Math.max(1,Math.round(num(g[71],1))),dx=num(g[44]),dy=num(g[45]);
+      var co=Math.cos(rot),si=Math.sin(rot);
+      for(var ci=0;ci<cols;ci++)for(var ri=0;ri<rows;ri++){
+        var Mi=mul(M,mul([1,0,0,1,ix,iy],mul([co,si,-si,co,0,0],mul([1,0,0,1,ci*dx,ri*dy],mul([sx,0,0,sy,0,0],[1,0,0,1,-blk.bx,-blk.by])))));
+        collect(blk.ents,Mi,depth+1,blocks,out,st);
+      }
+    }else if(t==='SPLINE'||t==='ELLIPSE'){st.ng++}
+    else if(t==='LINE'||t==='ARC'||t==='LWPOLYLINE'||t==='POLYLINE'){st.other++}
+  }
+}
+function arcPts(cx,cy,r,a1,sw,n){var o=[],k;for(k=0;k<=n;k++){var a=a1+sw*k/n;o.push([cx+r*Math.cos(a),cy+r*Math.sin(a)])}return o}
+function bulgeSeg(p,q,b){
+  if(!b||Math.abs(b)<1e-9)return [p,q];
+  var dx=q[0]-p[0],dy=q[1]-p[1],d=Math.sqrt(dx*dx+dy*dy);if(d<1e-12)return [p,q];
+  var th=4*Math.atan(b),r=d/(2*Math.sin(Math.abs(th)/2)),h=Math.sqrt(Math.max(r*r-d*d/4,0));
+  var sg=(b>0?1:-1)*(Math.abs(b)<=1?1:-1),cx=(p[0]+q[0])/2+sg*h*(-dy/d),cy=(p[1]+q[1])/2+sg*h*(dx/d);
+  return arcPts(cx,cy,r,Math.atan2(p[1]-cy,p[0]-cx),th,Math.max(4,Math.ceil(Math.abs(th)/(Math.PI/18))));
+}
+function polyPts(vs,closed){
+  var pts=[],n=vs.length,i,m=closed?n:n-1;
+  if(!n)return pts;pts.push([vs[0].x,vs[0].y]);
+  for(i=0;i<m;i++){var a=vs[i],b=vs[(i+1)%n],sg=bulgeSeg([a.x,a.y],[b.x,b.y],a.b);for(var k=1;k<sg.length;k++)pts.push(sg[k])}
+  return pts;
+}
+function collectGeom(ents,M,depth,blocks,out){
+  function T(p){return [M[0]*p[0]+M[2]*p[1]+M[4],M[1]*p[0]+M[3]*p[1]+M[5]]}
+  for(var i=0;i<ents.length;i++){
+    var e=ents[i],g=e.g,t=e.type,j;
+    if(t==='LINE'){out.push({pts:[T([num(g[10]),num(g[20])]),T([num(g[11]),num(g[21])])],closed:false})}
+    else if(t==='ARC'){
+      var a1=num(g[50])*Math.PI/180,a2=num(g[51])*Math.PI/180;if(a2<=a1)a2+=2*Math.PI;
+      out.push({pts:arcPts(num(g[10]),num(g[20]),num(g[40]),a1,a2-a1,Math.max(6,Math.ceil((a2-a1)/(Math.PI/36)))).map(T),closed:false});
+    }else if(t==='LWPOLYLINE'){
+      var vs=[],cv=null;
+      for(j=0;j<e.s.length;j++){var c=e.s[j][0],v=e.s[j][1];if(c===10){cv={x:parseFloat(v),y:0,b:0};vs.push(cv)}else if(c===20&&cv)cv.y=parseFloat(v);else if(c===42&&cv)cv.b=parseFloat(v)||0}
+      var cl=(num(g[70])&1)===1;out.push({pts:polyPts(vs,cl).map(T),closed:cl});
+    }else if(t==='POLYLINE'){
+      var pv=[];for(j=i+1;j<ents.length&&ents[j].type==='VERTEX';j++)pv.push({x:num(ents[j].g[10]),y:num(ents[j].g[20]),b:num(ents[j].g[42])});
+      var pc=(num(g[70])&1)===1;out.push({pts:polyPts(pv,pc).map(T),closed:pc});i=j-1;
+    }else if(t==='INSERT'){
+      var blk=blocks[g[2]?g[2][0]:''];if(!blk||depth>=4)continue;
+      var ix=num(g[10]),iy=num(g[20]),sx=g[41]?num(g[41],1):1,sy=g[42]?num(g[42],1):1,rot=num(g[50])*Math.PI/180;
+      var cols=Math.max(1,Math.round(num(g[70],1))),rows=Math.max(1,Math.round(num(g[71],1))),dx=num(g[44]),dy=num(g[45]),co=Math.cos(rot),si=Math.sin(rot);
+      for(var ci=0;ci<cols;ci++)for(var ri=0;ri<rows;ri++){
+        var Mi=mul(M,mul([1,0,0,1,ix,iy],mul([co,si,-si,co,0,0],mul([1,0,0,1,ci*dx,ri*dy],mul([sx,0,0,sy,0,0],[1,0,0,1,-blk.bx,-blk.by])))));
+        collectGeom(blk.ents,Mi,depth+1,blocks,out);
+      }
+    }
+  }
+}
+function buildGeom(parsed,scale){
+  var out=[];collectGeom(parsed.ents,[1,0,0,1,0,0],0,parsed.blocks,out);
+  for(var i=0;i<out.length;i++)for(var k=0;k<out[i].pts.length;k++){out[i].pts[k][0]*=scale;out[i].pts[k][1]*=scale}
+  return out;
+}
+/* ---- Nhận dạng rãnh dài / chữ nhật từ các đường, cung, polyline ---- */
+function hullOf(P){
+  var p=P.slice().sort(function(a,b){return a[0]-b[0]||a[1]-b[1]}),i;
+  function cr(o,a,b){return (a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0])}
+  var lo=[],up=[];
+  for(i=0;i<p.length;i++){while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],p[i])<=0)lo.pop();lo.push(p[i])}
+  for(i=p.length-1;i>=0;i--){while(up.length>=2&&cr(up[up.length-2],up[up.length-1],p[i])<=0)up.pop();up.push(p[i])}
+  lo.pop();up.pop();return lo.concat(up);
+}
+function polyArea(P){var s=0,i,n=P.length;for(i=0;i<n;i++){var a=P[i],b=P[(i+1)%n];s+=a[0]*b[1]-b[0]*a[1]}return Math.abs(s)/2}
+function minRect(P){
+  var h=hullOf(P);if(h.length<3)return null;
+  var best=null,i,k;
+  for(i=0;i<h.length;i++){
+    var a=h[i],b=h[(i+1)%h.length],dx=b[0]-a[0],dy=b[1]-a[1],d=Math.sqrt(dx*dx+dy*dy);
+    if(d<1e-12)continue;
+    var ux=dx/d,uy=dy/d,mnu=Infinity,mxu=-Infinity,mnv=Infinity,mxv=-Infinity;
+    for(k=0;k<h.length;k++){
+      var u=h[k][0]*ux+h[k][1]*uy,v=-h[k][0]*uy+h[k][1]*ux;
+      if(u<mnu)mnu=u;if(u>mxu)mxu=u;if(v<mnv)mnv=v;if(v>mxv)mxv=v;
+    }
+    var w=mxu-mnu,hh=mxv-mnv,ar=w*hh;
+    if(!best||ar<best.area){var cu=(mnu+mxu)/2,cv=(mnv+mxv)/2;best={area:ar,w:w,h:hh,ux:ux,uy:uy,cx:cu*ux-cv*uy,cy:cu*uy+cv*ux}}
+  }
+  return best;
+}
+function buildLoops(geom,tol){
+  var loops=[],open=[],i,j;
+  for(i=0;i<geom.length;i++){
+    var g=geom[i];if(!g.pts||g.pts.length<2)continue;
+    if(g.closed)loops.push({pts:g.pts.slice(),src:[i]});
+    else open.push({pts:g.pts,src:i,used:false});
+  }
+  var cell=Math.max(tol*4,1e-9),H={},t2=tol*tol;
+  function reg(x,y,ix){var k=Math.round(x/cell)+','+Math.round(y/cell);(H[k]=H[k]||[]).push(ix)}
+  for(i=0;i<open.length;i++){var p=open[i].pts;reg(p[0][0],p[0][1],i);reg(p[p.length-1][0],p[p.length-1][1],i)}
+  function near(x,y){
+    var bx=Math.round(x/cell),by=Math.round(y/cell),res=[],a,b,z;
+    for(a=-1;a<=1;a++)for(b=-1;b<=1;b++){var arr=H[(bx+a)+','+(by+b)];if(arr)for(z=0;z<arr.length;z++)res.push(arr[z])}
+    return res;
+  }
+  function d2(ax,ay,bx,by){var dx=ax-bx,dy=ay-by;return dx*dx+dy*dy}
+  for(i=0;i<open.length;i++){
+    if(open[i].used)continue;
+    open[i].used=true;
+    var chain=[i],cur=open[i].pts.slice(),closed=false,guard=0;
+    while(guard++<3000){
+      var e=cur[cur.length-1];
+      if(cur.length>3&&d2(e[0],e[1],cur[0][0],cur[0][1])<=t2){closed=true;break}
+      var cand=near(e[0],e[1]),found=-1,rev=false;
+      for(j=0;j<cand.length;j++){
+        var ix=cand[j];if(open[ix].used)continue;
+        var q=open[ix].pts;
+        if(d2(e[0],e[1],q[0][0],q[0][1])<=t2){found=ix;rev=false;break}
+        if(d2(e[0],e[1],q[q.length-1][0],q[q.length-1][1])<=t2){found=ix;rev=true;break}
+      }
+      if(found<0)break;
+      open[found].used=true;chain.push(found);
+      var qq=open[found].pts;
+      if(rev){for(j=qq.length-2;j>=0;j--)cur.push(qq[j])}else{for(j=1;j<qq.length;j++)cur.push(qq[j])}
+    }
+    if(closed){var src=[];for(j=0;j<chain.length;j++)src.push(open[chain[j]].src);loops.push({pts:cur,src:src})}
+    else for(j=1;j<chain.length;j++)open[chain[j]].used=false;
+  }
+  return loops;
+}
+function classifyLoop(pts){
+  var P=[],i,eps=1e-9;
+  for(i=0;i<pts.length;i++){
+    var p=pts[i],q=P[P.length-1];
+    if(!q||Math.abs(p[0]-q[0])>eps||Math.abs(p[1]-q[1])>eps)P.push(p);
+  }
+  if(P.length>3&&Math.abs(P[0][0]-P[P.length-1][0])<=eps&&Math.abs(P[0][1]-P[P.length-1][1])<=eps)P.pop();
+  if(P.length<3)return null;
+  var A=polyArea(P);if(A<=0)return null;
+  var R=minRect(P);if(!R||R.w<1e-9||R.h<1e-9)return null;
+  var L=Math.max(R.w,R.h),W=Math.min(R.w,R.h);
+  var ang=(R.w>=R.h?Math.atan2(R.uy,R.ux):Math.atan2(R.ux,-R.uy))*180/Math.PI;
+  ang=((ang%180)+180)%180;if(ang>179.95)ang=0;
+  var fill=A/(L*W),kS=1-(1-Math.PI/4)*(W/L),ty;
+  if(L/W<1.06&&fill>0.75&&fill<0.84){
+    ty='C';
+    var hl=hullOf(P),dm=0,m,n2;
+    for(m=0;m<hl.length;m++)for(n2=m+1;n2<hl.length;n2++){
+      var ddx=hl[m][0]-hl[n2][0],ddy=hl[m][1]-hl[n2][1],dd=ddx*ddx+ddy*ddy;
+      if(dd>dm)dm=dd;
+    }
+    if(dm>0){L=W=Math.sqrt(dm)}
+  }
+  else if(fill>0.965)ty='R';
+  else if(Math.abs(fill-kS)<0.04)ty='S';
+  else ty='O';
+  return {type:ty,x:R.cx,y:R.cy,L:L,W:W,ang:ang,pts:P};
+}
+function extractShapes(geom,span){
+  var tol=Math.max(span*5e-5,1e-7),loops=buildLoops(geom,tol),out=[],used={},i,j;
+  for(i=0;i<loops.length;i++){
+    var c=classifyLoop(loops[i].pts);
+    if(!c)continue;
+    out.push(c);
+    for(j=0;j<loops[i].src.length;j++)used[loops[i].src[j]]=1;
+  }
+  var left=0;for(i=0;i<geom.length;i++)if(!used[i])left++;
+  return {shapes:out,left:left};
+}
+function extractHoles(parsed,scale){
+  var raw=[],st={other:0,ng:0};
+  collect(parsed.ents,[1,0,0,1,0,0],0,parsed.blocks,raw,st);
+  var seen={},holes=[];
+  for(var i=0;i<raw.length;i++){
+    var h=raw[i];h.x*=scale;h.y*=scale;h.r*=scale;
+    h.key=h.pt?'P':String(Math.round(h.r*2*1000)/1000);
+    var k=Math.round(h.x*100)+','+Math.round(h.y*100)+','+h.key;
+    if(seen[k])continue;seen[k]=1;holes.push(h);
+  }
+  return {holes:holes,other:st.other,ng:st.ng};
+}
+function fmt(n){var r=Math.round(n*1000)/1000;if(Math.abs(r)<1e-9)r=0;return String(r)}
+function buildProgram(holes,o){
+  var tol=Math.max(o.tol,0.01),sorted=holes.slice().sort(function(a,b){return a.x-b.x}),cols=[],i,j;
+  for(i=0;i<sorted.length;i++){
+    var h=sorted[i],last=cols[cols.length-1];
+    if(last&&Math.abs(h.x-last.mean)<=tol){last.h.push(h);last.mean=(last.mean*(last.h.length-1)+h.x)/last.h.length}
+    else cols.push({h:[h],mean:h.x});
+  }
+  var minGap=Infinity;for(i=1;i<cols.length;i++)minGap=Math.min(minGap,cols[i].mean-cols[i-1].mean);
+  if(!o.xAsc)cols.reverse();
+  var order=[],colOf=[];
+  for(i=0;i<cols.length;i++){
+    var arr=cols[i].h.slice().sort(function(a,b){return a.y-b.y});
+    var up=o.snake?((i%2===0)===o.startUp):o.startUp;
+    if(!up)arr.reverse();
+    for(j=0;j<arr.length;j++){order.push(arr[j]);colOf.push(i)}
+  }
+  var ox=0,oy=0;
+  if(o.forceO){ox=o.forceOx||0;oy=o.forceOy||0}
+  else if(order.length){
+    if(o.origin==='first'){ox=order[0].x;oy=order[0].y}
+    else if(o.origin==='corner'){
+      var mnx=Infinity,mxx=-Infinity,mny=Infinity,mxy=-Infinity;
+      for(i=0;i<order.length;i++){mnx=Math.min(mnx,order[i].x);mxx=Math.max(mxx,order[i].x);mny=Math.min(mny,order[i].y);mxy=Math.max(mxy,order[i].y)}
+      ox=o.flipX?mxx:mnx;oy=o.flipY?mxy:mny;
+    }
+  }
+  var sx=o.flipX?-1:1,sy=o.flipY?-1:1;
+  var lines=[],k=0;
+  for(i=0;i<cols.length;i++){
+    var n=cols[i].h.length;
+    for(j=0;j<n;j++,k++){
+      var p=order[k];
+      lines.push(o.go+' X'+fmt((p.x-ox)*sx)+' Y'+fmt((p.y-oy)*sy));
+      if(j===0&&o.m1)lines.push(o.m1);
+      if(o.m2)lines.push(o.m2);
+    }
+    if(o.m3)lines.push(o.m3);
+  }
+  if(o.m30&&lines.length)lines.push('M30');
+  return {lines:lines,order:order,colOf:colOf,ncols:cols.length,ox:ox,oy:oy,minGap:minGap};
+}
+function medianOf(a){a=a.slice().sort(function(x,y){return x-y});return a[Math.floor(a.length/2)]}
+function buildDies(holes,o){
+  var tol=Math.max(o.tol,0.01),nc=Math.max(1,Math.round(o.nc)||1),nr=Math.max(1,Math.round(o.nr)||1),q,k,i,j;
+  var sorted=holes.slice().sort(function(a,b){return a.x-b.x}),cols=[];
+  for(i=0;i<sorted.length;i++){
+    var h=sorted[i],last=cols[cols.length-1];
+    if(last&&Math.abs(h.x-last.mean)<=tol){last.h.push(h);last.mean=(last.mean*(last.h.length-1)+h.x)/last.h.length}
+    else cols.push({h:[h],mean:h.x});
+  }
+  for(i=0;i<cols.length;i++)cols[i].h.sort(function(a,b){return a.y-b.y});
+  var gaps=[];
+  for(i=0;i<cols.length;i++)for(j=1;j<cols[i].h.length;j++){var g=cols[i].h[j].y-cols[i].h[j-1].y;if(g>tol)gaps.push(g)}
+  var p=gaps.length?medianOf(gaps):0;
+  if(!p&&(nr>1||nc>1))return {error:'Không xác định được bước Y giữa các lỗ trong một cột. Kiểm tra lại các lỗ đã chọn.'};
+  if(!p)p=1;
+  var tm=Math.max(0.01,Math.min(o.tol,p*0.2));
+  function find(col,used,target){
+    for(var a=0;a<col.h.length;a++){var y=col.h[a].y;if(y>target+tm)break;if(!used[a]&&Math.abs(y-target)<=tm)return a}
+    return -1;
+  }
+  function placeStrip(sc){
+    var dy=[],base=sc[0].h[0].y;
+    for(q=0;q<nc;q++){
+      var oq=((sc[q].h[0].y-base)%p+p)%p;if(oq<tm||oq>p-tm)oq=0;
+      dy.push(o.variant==='B'?oq:(oq>0?oq-p:0));
+    }
+    var best=null;
+    for(var ph=0;ph<=nr&&ph<sc[0].h.length;ph++){
+      var used=[],pl=[];for(q=0;q<nc;q++){used.push([]);for(j=0;j<sc[q].h.length;j++)used[q].push(false)}
+      for(var i0=ph;i0<sc[0].h.length;i0++){
+        if(used[0][i0])continue;
+        var y0=sc[0].h[i0].y,picks=[],ok=true;
+        for(q=0;q<nc&&ok;q++)for(k=0;k<nr;k++){var jj=find(sc[q],used[q],y0+dy[q]+k*p);if(jj<0){ok=false;break}picks.push([q,jj])}
+        if(ok){for(var z=0;z<picks.length;z++)used[picks[z][0]][picks[z][1]]=true;pl.push({y0:y0,i0:i0,picks:picks})}
+      }
+      if(!best||pl.length>best.pl.length)best={pl:pl};
+    }
+    return {dy:dy,pl:best?best.pl:[]};
+  }
+  var bestX=null;
+  for(var x0=0;x0<nc&&x0<cols.length;x0++){
+    var strips=[],total=0;
+    for(var st=0;x0+(st+1)*nc<=cols.length;st++){
+      var sc=cols.slice(x0+st*nc,x0+(st+1)*nc),res=placeStrip(sc);
+      strips.push({cols:sc,res:res});total+=res.pl.length;
+    }
+    if(!bestX||total>bestX.total)bestX={total:total,strips:strips};
+  }
+  var anchors=[],dies=[],usedSet=[];
+  if(bestX)for(var s1=0;s1<bestX.strips.length;s1++){
+    var S=bestX.strips[s1],dy=S.res.dy,sum=0;
+    for(q=0;q<nc;q++)sum+=dy[q]*nr+p*nr*(nr-1)/2;
+    var mdy=sum/(nc*nr),mx=0;for(q=0;q<nc;q++)mx+=S.cols[q].mean;mx/=nc;
+    for(i=0;i<S.res.pl.length;i++){
+      var pl=S.res.pl[i],hs=[];
+      for(j=0;j<pl.picks.length;j++){var hh=S.cols[pl.picks[j][0]].h[pl.picks[j][1]];hs.push(hh);usedSet.push(hh)}
+      var ax=o.ref==='center'?mx:S.cols[0].h[pl.i0].x,ay=o.ref==='center'?pl.y0+mdy:pl.y0;
+      anchors.push({x:ax,y:ay});dies.push({strip:s1,holes:hs});
+    }
+  }
+  var leftover=[];
+  for(i=0;i<holes.length;i++)if(usedSet.indexOf(holes[i])<0)leftover.push(holes[i]);
+  return {anchors:anchors,dies:dies,leftover:leftover,p:p,nc:nc,nr:nr,strips:bestX?bestX.strips.length:0};
+}
+/* ---- Tách bản vẽ thành từng ô lưới ---- */
+function pitchOf(vals,tol){
+  var v=vals.slice().sort(function(a,b){return a-b}),u=[],i;
+  for(i=0;i<v.length;i++){if(!u.length||v[i]-u[u.length-1]>tol)u.push(v[i])}
+  var g=[];for(i=1;i<u.length;i++)g.push(u[i]-u[i-1]);
+  return g.length?medianOf(g):0;
+}
+function splitPanels(holes,o){
+  var i,k,map={},out=[],n=holes.length;
+  if(n<2)return [holes];
+  var minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
+  for(i=0;i<n;i++){var h=holes[i];if(h.x<minx)minx=h.x;if(h.x>maxx)maxx=h.x;if(h.y<miny)miny=h.y;if(h.y>maxy)maxy=h.y}
+  if(o.mode==='grid'){
+    var nx=Math.max(1,Math.round(o.nx)||1),ny=Math.max(1,Math.round(o.ny)||1);
+    if(nx*ny<=1)return [holes];
+    var w=(maxx-minx)||1,hh=(maxy-miny)||1;
+    for(i=0;i<n;i++){
+      var cx=Math.min(nx-1,Math.floor((holes[i].x-minx)/w*nx*(1-1e-12)));
+      var cy=Math.min(ny-1,Math.floor((holes[i].y-miny)/hh*ny*(1-1e-12)));
+      k=cx+','+cy;if(!map[k]){map[k]=[];out.push(map[k])}map[k].push(holes[i]);
+    }
+    return out;
+  }
+  var xs=[],ys=[];for(i=0;i<n;i++){xs.push(holes[i].x);ys.push(holes[i].y)}
+  var tol=Math.max(o.tol,0.01),span=Math.max(maxx-minx,maxy-miny,1);
+  var f=o.factor;if(!(f>1.2))f=2.5;
+  var px=pitchOf(xs,tol),py=pitchOf(ys,tol);
+  var tx=px>0?px*f:span*2,ty=py>0?py*f:span*2;
+  var par=[];for(i=0;i<n;i++)par.push(i);
+  function fnd(a){while(par[a]!==a){par[a]=par[par[a]];a=par[a]}return a}
+  function uni(a,b){a=fnd(a);b=fnd(b);if(a!==b)par[b]=a}
+  var H={};
+  for(i=0;i<n;i++){k=Math.floor(holes[i].x/tx)+','+Math.floor(holes[i].y/ty);(H[k]=H[k]||[]).push(i)}
+  for(i=0;i<n;i++){
+    var bx=Math.floor(holes[i].x/tx),by=Math.floor(holes[i].y/ty),a,b,z;
+    for(a=-1;a<=1;a++)for(b=-1;b<=1;b++){
+      var arr=H[(bx+a)+','+(by+b)];if(!arr)continue;
+      for(z=0;z<arr.length;z++){
+        var j2=arr[z];if(j2<=i)continue;
+        if(Math.abs(holes[i].x-holes[j2].x)<=tx&&Math.abs(holes[i].y-holes[j2].y)<=ty)uni(i,j2);
+      }
+    }
+  }
+  for(i=0;i<n;i++){k=fnd(i);if(!map[k]){map[k]=[];out.push(map[k])}map[k].push(holes[i])}
+  return out;
+}
+function panelBox(hs){
+  var minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,i,k;
+  function bd(x,y){if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y}
+  for(i=0;i<hs.length;i++){
+    var h=hs[i],r=h.r||0;
+    if(h.pts&&h.pts.length){for(k=0;k<h.pts.length;k++)bd(h.pts[k][0],h.pts[k][1])}
+    else{bd(h.x-r,h.y-r);bd(h.x+r,h.y+r)}
+  }
+  return {minx:minx,maxx:maxx,miny:miny,maxy:maxy,cx:(minx+maxx)/2,cy:(miny+maxy)/2};
+}
+function orderPanels(panels,mode){
+  if(panels.length<2)return panels;
+  var P=[],hv=[],i,j;
+  for(i=0;i<panels.length;i++){var b=panelBox(panels[i]);b.hs=panels[i];P.push(b);hv.push(b.maxy-b.miny)}
+  var tolRow=Math.max(medianOf(hv)*0.5,1e-9);
+  P.sort(function(a,b){return a.cy-b.cy||a.cx-b.cx});
+  var rows=[],cur=null;
+  for(i=0;i<P.length;i++){
+    if(!cur||P[i].cy-cur.y0>tolRow){cur={y0:P[i].cy,items:[]};rows.push(cur)}
+    cur.items.push(P[i]);
+  }
+  var topDown=mode.indexOf('tb')===0,snake=mode.indexOf('snake')>=0,out=[];
+  if(topDown)rows.reverse();
+  for(i=0;i<rows.length;i++){
+    var it=rows[i].items.slice().sort(function(a,b){return a.cx-b.cx});
+    if(snake&&i%2===1)it.reverse();
+    for(j=0;j<it.length;j++)out.push(it[j].hs);
+  }
+  return out;
+}
+/*ENDCORE*/
+
+/* ===== Giao diện ===== */
+var $=function(i){return document.getElementById(i)};
+var state={parsed:null,holesAll:[],other:0,sample:false};
+var OPT_IDS=['origin','tol','xdir','sdir','snake','scale','go','m1','m2','m3','fname','fext','nc','nr','dvar','dref','split','mtool','ysign','xsign','pmode','pnx','pny','pgap','porder','mpanel'];
+function keyRank(k){if(k==='P')return 4;if(k.charAt(1)===':'){var c=k.charAt(0);return c==='S'?1:(c==='R'?2:3)}return 0}
+function keySize(k){var f=parseFloat(k.charAt(1)===':'?k.slice(2):k);return isNaN(f)?0:f}
+function sortKeys(a,b){var ra=keyRank(a),rb=keyRank(b);return ra!==rb?ra-rb:keySize(a)-keySize(b)}
+function keyLabel(k){
+  if(k==='P')return 'Điểm (POINT)';
+  if(k.charAt(1)===':'){
+    var t=k.charAt(0),m=k.slice(2).split('@'),d=m[0].split('x');
+    var nm=t==='S'?'Rãnh dài':(t==='R'?'Chữ nhật':'Hình khác');
+    var a=parseFloat(m[1])||0;
+    return nm+' '+d[0].replace('.',',')+' × '+d[1].replace('.',',')+' mm'+(a?' · nghiêng '+(Math.round(a*10)/10)+'°':'');
+  }
+  return 'Ø'+k.replace('.',',')+' mm';
+}
+function shapeKey(s){
+  if(s.type==='C')return String(Math.round(s.L*1000)/1000);
+  function rr(v){return String(Math.round(v*100)/100)}
+  return s.type+':'+rr(s.L)+'x'+rr(s.W)+'@'+(Math.round(s.ang*2)/2);
+}
+function holeSVG(h,X,Y,attr,minr){
+  if(h.pts&&h.pts.length>2){
+    var d='M',k;for(k=0;k<h.pts.length;k++)d+=(k?'L':'')+X(h.pts[k][0])+' '+Y(h.pts[k][1]);
+    return '<path d="'+d+'Z" '+attr+' stroke-width="1" vector-effect="non-scaling-stroke"/>';
+  }
+  return '<circle cx="'+X(h.x)+'" cy="'+Y(h.y)+'" r="'+Math.max(h.r||0,minr).toFixed(2)+'" '+attr+' stroke-width="1" vector-effect="non-scaling-stroke"/>';
+}
+function msg(t,cls){$('msg').innerHTML=t?'<div class="'+(cls||'err')+'">'+t+'</div>':''}
+function loadOpts(){try{var o=JSON.parse(localStorage.getItem('dxf-gcode-opt'));if(o){OPT_IDS.forEach(function(i){if(o[i]!=null)$(i).value=o[i]});if(o.m30!=null)$('m30').checked=o.m30;if(o.dieOn!=null)$('dieOn').checked=o.dieOn;if(o.panelOn!=null)$('panelOn').checked=o.panelOn}}catch(e){}}
+function saveOpts(){try{var o={};OPT_IDS.forEach(function(i){o[i]=$(i).value});o.m30=$('m30').checked;o.dieOn=$('dieOn').checked;o.panelOn=$('panelOn').checked;localStorage.setItem('dxf-gcode-opt',JSON.stringify(o))}catch(e){}}
+function readOpts(){
+  var t=parseFloat(String($('tol').value).replace(',','.'));if(isNaN(t)||t<0.01)t=0.5;
+  return {origin:$('origin').value,tol:t,xAsc:$('xdir').value==='asc',startUp:$('sdir').value==='up',snake:$('snake').value==='snake',
+    flipX:$('xsign').value==='left',flipY:$('ysign').value==='down',go:$('go').value.trim()||'G0',m1:$('m1').value.trim(),m2:$('m2').value.trim(),m3:$('m3').value.trim(),m30:$('m30').checked};
+}
+function outName(){var b=$('fname').value.trim().replace(/\.[^.\s\\/]*$/,'');if(!b)b='dapluoi';return b+$('fext').value}
+function syncDlLabel(){$('dlbtn').textContent='T\u1ea3i file '+$('fext').value}
+function getScale(){var s=parseFloat($('scale').value);return (isNaN(s)||s<=0)?1:s}
+function rebuildList(){
+  var sc=getScale(),res=extractHoles(state.parsed,sc),i,k;
+  state.geom=buildGeom(state.parsed,sc);
+  var holes=res.holes,seen={};
+  for(i=0;i<holes.length;i++)seen[Math.round(holes[i].x*100)+','+Math.round(holes[i].y*100)+','+holes[i].key]=1;
+  var minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
+  for(i=0;i<state.geom.length;i++)for(k=0;k<state.geom[i].pts.length;k++){
+    var q=state.geom[i].pts[k];
+    if(q[0]<minx)minx=q[0];if(q[0]>maxx)maxx=q[0];if(q[1]<miny)miny=q[1];if(q[1]>maxy)maxy=q[1];
+  }
+  var span=isFinite(minx)?Math.max(maxx-minx,maxy-miny,1):1;
+  var sh=extractShapes(state.geom,span);
+  for(i=0;i<sh.shapes.length;i++){
+    var s=sh.shapes[i],key=shapeKey(s),id=Math.round(s.x*100)+','+Math.round(s.y*100)+','+key;
+    if(seen[id])continue;seen[id]=1;
+    holes.push({x:s.x,y:s.y,r:s.W/2,key:key,shape:s.type,L:s.L,W:s.W,ang:s.ang,pts:s.pts});
+  }
+  state.holesAll=holes;state.other=sh.left;state.ng=res.ng;
+  var cnt={},keys=[];
+  for(i=0;i<holes.length;i++){k=holes[i].key;if(!cnt[k]){cnt[k]=0;keys.push(k)}cnt[k]++}
+  keys.sort(sortKeys);
+  var hasMain=false,hasRect=false;
+  for(i=0;i<keys.length;i++){var r0=keyRank(keys[i]);if(r0===0||r0===1)hasMain=true;if(r0===2)hasRect=true}
+  var h='';
+  for(i=0;i<keys.length;i++){
+    var key2=keys[i],rk=keyRank(key2),on;
+    if(rk===0||rk===1)on=true;
+    else if(rk===2)on=!hasMain&&cnt[key2]>1;
+    else if(rk===4)on=!hasMain&&!hasRect;
+    else on=false;
+    h+='<label><input type="checkbox" class="dk" data-k="'+key2+'"'+(on?' checked':'')+'>'+keyLabel(key2)+' \u00b7 '+cnt[key2]+' l\u1ed7</label>';
+  }
+  $('dl').innerHTML=h||'Kh\u00f4ng th\u1ea5y l\u1ed7 n\u00e0o.';
+  var cks=document.querySelectorAll('.dk');for(i=0;i<cks.length;i++)cks[i].addEventListener('change',recompute);
+}
+function leftoverMsg(){
+  var a=[];
+  if(state.other)a.push(state.other+' \u0111\u01b0\u1eddng/cung ch\u01b0a kh\u00e9p k\u00edn th\u00e0nh h\u00ecnh');
+  if(state.ng)a.push(state.ng+' spline/ellipse ch\u01b0a \u0111\u1ecdc \u0111\u01b0\u1ee3c');
+  return a.length?' (\u0111\u00e3 b\u1ecf qua '+a.join(', ')+')':'';
+}
+function drawDrawing(){
+  var G=state.geom||[],H=state.holesAll,i,k;
+  if(!G.length&&!H.length){$('dwg').innerHTML='';return}
+  var on={},cks=document.querySelectorAll('.dk');
+  for(i=0;i<cks.length;i++)if(cks[i].checked)on[cks[i].getAttribute('data-k')]=1;
+  var minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
+  function bd(x,y){if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y}
+  for(i=0;i<G.length;i++)for(k=0;k<G[i].pts.length;k++)bd(G[i].pts[k][0],G[i].pts[k][1]);
+  for(i=0;i<H.length;i++){bd(H[i].x-H[i].r,H[i].y-H[i].r);bd(H[i].x+H[i].r,H[i].y+H[i].r)}
+  if(!isFinite(minx)){$('dwg').innerHTML='';return}
+  var span=Math.max(maxx-minx,maxy-miny,1),pad=span*0.03,W=maxx-minx+2*pad,Hh=maxy-miny+2*pad;
+  function X(x){return (x-minx+pad).toFixed(2)}
+  function Y(y){return (maxy-y+pad).toFixed(2)}
+  var s='<svg viewBox="0 0 '+W.toFixed(2)+' '+Hh.toFixed(2)+'" style="margin-top:10px">';
+  for(i=0;i<G.length;i++){
+    var d='M';for(k=0;k<G[i].pts.length;k++)d+=(k?'L':'')+X(G[i].pts[k][0])+' '+Y(G[i].pts[k][1]);
+    s+='<path d="'+d+(G[i].closed?'Z':'')+'" fill="none" stroke="var(--tx)" stroke-opacity=".7" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+  }
+  for(i=0;i<H.length;i++){
+    var h=H[i],sel=on[h.key];
+    s+=holeSVG(h,X,Y,sel?(h._lo?'fill="#d92d20" fill-opacity=".3" stroke="#d92d20"':'class="c0"'):'fill="none" stroke="#8a94a3"',span*0.002);
+  }
+  $('dwg').innerHTML='<div class="hint" style="margin-top:10px">Hình bản vẽ: '+fmt(maxx-minx)+' × '+fmt(maxy-miny)+' mm · lỗ màu xanh = sẽ dập, lỗ xám = đang bỏ chọn'+leftoverMsg()+'</div>'+s+'</svg>';
+}
+function selectedHoles(){
+  var on={},cks=document.querySelectorAll('.dk'),i;
+  for(i=0;i<cks.length;i++)if(cks[i].checked)on[cks[i].getAttribute('data-k')]=1;
+  return state.holesAll.filter(function(h){return on[h.key]});
+}
+function recompute(){recompute2();drawDrawing()}
+function recompute2(){
+  saveOpts();
+  if(!state.parsed){return}
+  var i,j;
+  for(i=0;i<state.holesAll.length;i++)state.holesAll[i]._lo=false;
+  var holes=selectedHoles();
+  if(!holes.length){
+    $('out').value='';$('pv').innerHTML='';$('stat').textContent='';
+    msg(state.holesAll.length?'Ch\u01b0a ch\u1ecdn lo\u1ea1i l\u1ed7 n\u00e0o \u1edf b\u01b0\u1edbc 2.':'Kh\u00f4ng th\u1ea5y l\u1ed7 n\u00e0o trong b\u1ea3n v\u1ebd'+leftoverMsg()+'. L\u1ed7 tr\u00f2n h\u00e3y v\u1ebd b\u1eb1ng l\u1ec7nh CIRCLE, r\u00e3nh d\u00e0i h\u00e3y l\u00e0 \u0111\u01b0\u1eddng kh\u00e9p k\u00edn (JOIN ho\u1eb7c PEDIT).','err');
+    return;
+  }
+  var op=readOpts(),useDie=$('dieOn').checked,m30=op.m30;op.m30=false;
+  var tool=$('mtool').value.trim(),split=$('split').value==='split';
+  var groups=[],gkeys=[];
+  if(split){
+    var map={},ord=[];
+    for(i=0;i<holes.length;i++){var k=holes[i].key;if(!map[k]){map[k]=[];ord.push(k)}map[k].push(holes[i])}
+    ord.sort(sortKeys);
+    for(i=0;i<ord.length;i++){groups.push(map[ord[i]]);gkeys.push(ord[i])}
+  }else{groups=[holes];gkeys=[null]}
+  if(op.origin==='corner'){
+    var mnx=Infinity,mxx=-Infinity,mny=Infinity,mxy=-Infinity;
+    for(i=0;i<holes.length;i++){mnx=Math.min(mnx,holes[i].x);mxx=Math.max(mxx,holes[i].x);mny=Math.min(mny,holes[i].y);mxy=Math.max(mxy,holes[i].y)}
+    op.forceO=true;op.forceOx=op.flipX?mxx:mnx;op.forceOy=op.flipY?mxy:mny;
+  }
+  var usePanel=$('panelOn').checked,mpanel=$('mpanel').value.trim(),porder=$('porder').value;
+  var nearP=porder==='near';
+  var popt=usePanel?{mode:$('pmode').value,nx:parseFloat($('pnx').value),ny:parseFloat($('pny').value),factor:parseFloat(String($('pgap').value).replace(',','.')),tol:op.tol}:null;
+  var lines=[],order=[],colOf=[],ncols=0,minGap=Infinity,cells=[],dots=[],parts=[],warns=[],nLeft=0,boxes=[],noDie=0;
+  function variant(pos,xa,su){var o2={},kk;for(kk in op)o2[kk]=op[kk];o2.xAsc=xa;o2.startUp=su;return buildProgram(pos,o2)}
+  var COMBO=[[true,true],[true,false],[false,true],[false,false]];
+  for(var gi=0;gi<groups.length;gi++){
+    var g=groups[gi];
+    var panels=popt?splitPanels(g,popt):[g];
+    if(!nearP)panels=orderPanels(panels,porder);
+    if(gi&&tool)lines.push(tool);
+    var prep=[],gShots=0,gPer=1,gDie=false,pi,si;
+    for(pi=0;pi<panels.length;pi++){
+      var gp=panels[pi],pos=gp,per=1,D=null;
+      if(useDie){
+        D=buildDies(gp,{tol:op.tol,nc:parseFloat($('nc').value),nr:parseFloat($('nr').value),variant:$('dvar').value,ref:$('dref').value});
+        if(D.error||!D.anchors.length){noDie++;D=null}
+        else{
+          pos=D.anchors;per=D.nc*D.nr;gPer=per;gDie=true;
+          for(i=0;i<D.dies.length;i++)for(j=0;j<D.dies[i].holes.length;j++)cells.push({h:D.dies[i].holes[j],c:D.dies[i].strip%2});
+          for(i=0;i<D.leftover.length;i++){D.leftover[i]._lo=true;cells.push({h:D.leftover[i],c:-1});nLeft++}
+        }
+      }
+      prep.push({hs:gp,pos:pos,die:!!D});
+    }
+    /* chọn thứ tự chạy các ô */
+    var seq=[];
+    if(nearP&&prep.length>1){
+      for(pi=0;pi<prep.length;pi++){
+        prep[pi].v=[];
+        for(j=0;j<4;j++){
+          var rv=variant(prep[pi].pos,COMBO[j][0],COMBO[j][1]);
+          if(!rv.order.length)continue;
+          prep[pi].v.push({xa:COMBO[j][0],su:COMBO[j][1],s:rv.order[0],e:rv.order[rv.order.length-1]});
+        }
+      }
+      var gnx=Infinity,gxx=-Infinity,gny=Infinity,gxy=-Infinity;
+      for(i=0;i<g.length;i++){if(g[i].x<gnx)gnx=g[i].x;if(g[i].x>gxx)gxx=g[i].x;if(g[i].y<gny)gny=g[i].y;if(g[i].y>gxy)gxy=g[i].y}
+      var remain=prep.slice(),cur={x:op.xAsc?gnx:gxx,y:op.startUp?gny:gxy},first=true;
+      while(remain.length){
+        var best=null;
+        for(i=0;i<remain.length;i++)for(j=0;j<remain[i].v.length;j++){
+          var V=remain[i].v[j];
+          if(first&&(V.xa!==op.xAsc||V.su!==op.startUp))continue;
+          var ddx=V.s.x-cur.x,ddy=V.s.y-cur.y,dd=ddx*ddx+ddy*ddy;
+          if(!best||dd<best.d)best={d:dd,i:i,V:V};
+        }
+        if(!best){for(i=0;i<remain.length;i++)seq.push({p:remain[i],xa:op.xAsc,su:op.startUp});break}
+        seq.push({p:remain[best.i],xa:best.V.xa,su:best.V.su});
+        cur={x:best.V.e.x,y:best.V.e.y};remain.splice(best.i,1);first=false;
+      }
+    }else{
+      for(pi=0;pi<prep.length;pi++)seq.push({p:prep[pi],xa:op.xAsc,su:op.startUp});
+    }
+    /* sinh mã theo thứ tự đã chọn */
+    for(si=0;si<seq.length;si++){
+      var r=variant(seq[si].p.pos,seq[si].xa,seq[si].su);
+      if(si&&mpanel)lines.push(mpanel);
+      for(i=0;i<r.lines.length;i++)lines.push(r.lines[i]);
+      for(i=0;i<r.order.length;i++){order.push(r.order[i]);colOf.push(ncols+r.colOf[i])}
+      if(seq[si].p.die)for(i=0;i<r.order.length;i++)dots.push(r.order[i]);
+      else for(i=0;i<r.order.length;i++)cells.push({h:r.order[i],c:(ncols+r.colOf[i])%2});
+      ncols+=r.ncols;gShots+=r.order.length;
+      if(r.minGap<minGap)minGap=r.minGap;
+      if(!op.forceO){op.forceO=true;op.forceOx=r.ox;op.forceOy=r.oy}
+      if(seq.length>1&&r.order.length)boxes.push(panelBox(seq[si].p.hs));
+    }
+    if(noDie)warns.push('C\u00f3 '+noDie+' \u00f4 kh\u00f4ng x\u1ebfp \u0111\u01b0\u1ee3c khu\u00f4n ch\u00f9m n\u00ean \u0111\u01b0\u1ee3c d\u1eadp t\u1eebng l\u1ed7 m\u1ed9t.');
+    noDie=0;
+    parts.push({key:gkeys[gi],n:g.length,shots:gShots,per:gPer,die:gDie,np:panels.length});
+  }
+  if(m30&&lines.length)lines.push('M30');
+  $('out').value=lines.join('\n');
+  var txt=[],tot=0;
+  for(i=0;i<parts.length;i++){
+    var P=parts[i],lab=P.key?keyLabel(P.key):(P.n+' l\u1ed7');
+    tot+=P.shots;
+    txt.push(lab+(P.key?' \u00d7 '+P.n:'')+': '+P.shots+' l\u1ea7n d\u1eadp'+(P.die?' (khu\u00f4n '+P.per+' kim)':''));
+  }
+  var bx=0,by=0,minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity;
+  for(i=0;i<holes.length;i++){minx=Math.min(minx,holes[i].x);maxx=Math.max(maxx,holes[i].x);miny=Math.min(miny,holes[i].y);maxy=Math.max(maxy,holes[i].y)}
+  bx=maxx-minx;by=maxy-miny;
+  var np=0;for(i=0;i<parts.length;i++)np=Math.max(np,parts[i].np||1);
+  var trav=0;for(i=1;i<order.length;i++){var tdx=order[i].x-order[i-1].x,tdy=order[i].y-order[i-1].y;trav+=Math.sqrt(tdx*tdx+tdy*tdy)}
+  var travTx=trav>=1000?(Math.round(trav/100)/10)+' m':Math.round(trav)+' mm';
+  $('stat').textContent=txt.join(' \u00b7 ')+' \u00b7 t\u1ed5ng '+tot+' l\u1ea7n d\u1eadp'+(np>1?' \u00b7 '+np+' \u00f4':'')+' \u00b7 qu\u00e3ng ch\u1ea1y ~'+travTx+' \u00b7 c\u1ee5m l\u1ed7 r\u1ed9ng '+fmt(bx)+' \u00d7 cao '+fmt(by)+' mm';
+  if(nLeft)warns.push('C\u00f2n '+nLeft+' l\u1ed7 kh\u00f4ng \u0111\u1ee7 ch\u1ed7 cho c\u1ea3 khu\u00f4n (t\u00f4 \u0111\u1ecf tr\u00ean h\u00ecnh) v\u00e0 \u0111\u00e3 b\u1ecb b\u1ecf qua. N\u1ebfu nhi\u1ec1u qu\u00e1, th\u1eed \u0111\u1ed5i \u201cH\u00ecnh khu\u00f4n\u201d.');
+  if(!useDie&&minGap<1&&ncols>1)warns.push('C\u00f3 hai c\u1ed9t c\u00e1ch nhau ch\u1ec9 '+fmt(minGap)+' mm, c\u00f3 th\u1ec3 m\u1ed9t c\u1ed9t b\u1ecb t\u00e1ch \u0111\u00f4i. H\u00e3y t\u0103ng \u00f4 \u201cGom c\u1ed9t: l\u1ec7ch X cho ph\u00e9p\u201d \u1edf b\u01b0\u1edbc 3.');
+  if(groups.length>1&&!tool)warns.push('\u0110ang t\u00e1ch '+groups.length+' lo\u1ea1i l\u1ed7 nh\u01b0ng ch\u01b0a \u0111i\u1ec1n M\u00e3 \u0111\u1ed5i khu\u00f4n \u1edf b\u01b0\u1edbc 3 \u2014 h\u00e3y th\u00eam n\u1ebfu m\u00e1y c\u1ea7n l\u1ec7nh \u0111\u1ed5i d\u1ee5ng c\u1ee5.');
+  if(warns.length)msg(warns.join(' '),'warn');
+  else msg(state.sample?'\u0110ang d\u00f9ng d\u1eef li\u1ec7u m\u1eabu.':'\u0110\u1ecdc xong b\u1ea3n v\u1ebd.'+leftoverMsg(),'ok');
+  drawOrder(order,cells,dots,boxes);
+}
+function drawOrder(order,cells,dots,boxes){
+  if(!order.length){$('pv').innerHTML='';return}
+  var i,k,minx=Infinity,maxx=-Infinity,miny=Infinity,maxy=-Infinity,maxr=0;
+  function bd(x,y){if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y}
+  for(i=0;i<cells.length;i++){
+    var h=cells[i].h;
+    if(h.pts)for(k=0;k<h.pts.length;k++)bd(h.pts[k][0],h.pts[k][1]);
+    else bd(h.x,h.y);
+    if(h.r>maxr)maxr=h.r;
+  }
+  for(i=0;i<order.length;i++)bd(order[i].x,order[i].y);
+  var pad=Math.max(maxr*1.5,(maxx-minx+maxy-miny)*0.03,2),W=maxx-minx+2*pad,H=maxy-miny+2*pad;
+  function X(x){return (x-minx+pad).toFixed(2)}
+  function Y(y){return (maxy-y+pad).toFixed(2)}
+  var rr=Math.max(maxr,pad*0.08);
+  var s='<svg viewBox="0 0 '+W.toFixed(2)+' '+H.toFixed(2)+'">',path='M';
+  for(i=0;i<order.length;i++)path+=(i?'L':'')+X(order[i].x)+' '+Y(order[i].y);
+  if(boxes&&boxes.length>1){
+    var fs=Math.max((W+H)*0.018,rr*1.6),pd=Math.max(rr*0.9,(W+H)*0.004);
+    for(i=0;i<boxes.length;i++){
+      var B=boxes[i];
+      s+='<rect x="'+X(B.minx-pd)+'" y="'+Y(B.maxy+pd)+'" width="'+(B.maxx-B.minx+2*pd).toFixed(2)+'" height="'+(B.maxy-B.miny+2*pd).toFixed(2)+'" rx="'+(pd*0.6).toFixed(2)+'" fill="none" stroke="#8a94a3" stroke-dasharray="5 4" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+      s+='<text x="'+X(B.minx-pd)+'" y="'+(parseFloat(Y(B.maxy+pd))-fs*0.35).toFixed(2)+'" font-size="'+fs.toFixed(2)+'" font-weight="600" fill="var(--tx)" fill-opacity=".75">\u00f4 '+(i+1)+'</text>';
+    }
+  }
+  s+='<path d="'+path+'" fill="none" stroke="#8a94a3" stroke-width="1" vector-effect="non-scaling-stroke" stroke-opacity=".7"/>';
+  for(i=0;i<cells.length;i++){
+    var c=cells[i];
+    s+=holeSVG(c.h,X,Y,c.c<0?'fill="#d92d20" fill-opacity=".25" stroke="#d92d20"':'class="c'+c.c+'"',rr*0.6);
+  }
+  for(i=0;i<dots.length;i++)s+='<circle cx="'+X(dots[i].x)+'" cy="'+Y(dots[i].y)+'" r="'+(rr*0.35).toFixed(2)+'" fill="#fff" stroke="#333" stroke-width="1" vector-effect="non-scaling-stroke"/>';
+  var big=rr*1.9;
+  s+='<circle cx="'+X(order[0].x)+'" cy="'+Y(order[0].y)+'" r="'+big.toFixed(2)+'" fill="none" stroke="#1a9d4b" stroke-width="2.5" vector-effect="non-scaling-stroke"/>';
+  s+='<circle cx="'+X(order[order.length-1].x)+'" cy="'+Y(order[order.length-1].y)+'" r="'+big.toFixed(2)+'" fill="none" stroke="#d92d20" stroke-width="2.5" vector-effect="non-scaling-stroke"/>';
+  $('pv').innerHTML=s+'</svg>';
+}
+function useText(text,sample){
+  if(/^AutoCAD Binary DXF/.test(text)){msg('Đây là DXF dạng nhị phân. Hãy lưu lại ở dạng DXF ASCII (SAVEAS → chọn kiểu DXF bản thường, không chọn Binary).');return}
+  if(/^AC10\d\d/.test(text)){msg('Đây là file DWG. Mở trong AutoCAD, dùng SAVEAS để lưu thành DXF rồi chọn lại.');return}
+  var parsed=parseDXF(text);
+  if(!parsed.ents.length&&!Object.keys(parsed.blocks).length){msg('Không đọc được dữ liệu. Hãy kiểm tra đây là file .dxf bản ASCII.');return}
+  state.parsed=parsed;state.sample=!!sample;rebuildList();recompute();
+}
+$('f').addEventListener('change',function(){
+  var f=this.files&&this.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(){useText(String(rd.result),false)};
+  rd.onerror=function(){msg('Không đọc được file.')};
+  rd.readAsText(f);
+});
+$('sample2').addEventListener('click',function(){
+  var d=['0','SECTION','2','ENTITIES'],L=20,W=6,a=(L-W)/2,i,j;
+  for(i=0;i<5;i++)for(j=0;j<4;j++){
+    var cx=i*30,cy=j*14+(i%2?7:0);
+    d.push('0','LWPOLYLINE','8','0','90','4','70','1');
+    d.push('10',String(cx-a),'20',String(cy-W/2),'42','0');
+    d.push('10',String(cx+a),'20',String(cy-W/2),'42','1');
+    d.push('10',String(cx+a),'20',String(cy+W/2),'42','0');
+    d.push('10',String(cx-a),'20',String(cy+W/2),'42','1');
+  }
+  d.push('0','ENDSEC','0','EOF');
+  useText(d.join('\n'),true);
+});
+$('sample3').addEventListener('click',function(){
+  var d=['0','SECTION','2','ENTITIES'],px,py,i,j;
+  for(px=0;px<3;px++)for(py=0;py<2;py++)for(i=0;i<4;i++)for(j=0;j<4;j++)
+    d.push('0','CIRCLE','8','0','10',String(px*100+i*10),'20',String(py*100+j*10),'30','0','40','3');
+  d.push('0','ENDSEC','0','EOF');
+  useText(d.join('\n'),true);
+});
+$('sample').addEventListener('click',function(){
+  var d=['0','SECTION','2','ENTITIES'],cx=[0,8,16,24],i,j;
+  for(i=0;i<cx.length;i++)for(j=0;j<4;j++){var y=(i%2===0?0:5)+j*10;if(i%2&&j>2)continue;d.push('0','CIRCLE','8','0','10',String(cx[i]),'20',String(y),'30','0','40','3')}
+  d.push('0','ENDSEC','0','EOF');
+  useText(d.join('\n'),true);
+});
+OPT_IDS.forEach(function(i){$(i).addEventListener('change',function(){if(i==='scale'&&state.parsed)rebuildList();recompute()});$(i).addEventListener('input',function(){if(i!=='scale')recompute()})});
+$('m30').addEventListener('change',recompute);$('dieOn').addEventListener('change',recompute);$('panelOn').addEventListener('change',recompute);
+var DLP=(window.claude&&claude.use)?claude.use('downloads')['catch'](function(){return null}):Promise.resolve(null);
+function saveAnchor(blob,name){
+  if(navigator.msSaveBlob){navigator.msSaveBlob(blob,name);$('cm').textContent='Đã tải '+name;return}
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(a.href)},500);
+  $('cm').textContent='Đã tải '+name;
+}
+$('dlbtn').addEventListener('click',function(){
+  var t=$('out').value;if(!t){$('cm').textContent='Chưa có mã để tải.';return}
+  t=t.replace(/\r?\n/g,'\r\n')+'\r\n';
+  var name=outName();
+  var blob=new Blob([t],{type:'text/plain'});
+  $('cm').textContent='Đang chuẩn bị tải…';
+  DLP.then(function(DL){
+  if(!DL){saveAnchor(blob,name);return}
+  return DL.save({filename:name,data:t}).then(function(){
+    $('cm').textContent='Đã tải '+name;
+  },function(e){
+    var code=e&&e.code;
+    if(code==='declined'){$('cm').textContent='Đã huỷ tải.';return}
+    if(code==='rejected_extension'||code==='extension_not_enabled'){
+      var alt=name.replace(/\.[^.\s]*$/,'')+'.txt';
+      DL.save({filename:alt,data:t}).then(function(){
+        $('cm').textContent='Đã tải '+alt+' — hãy đổi đuôi file thành '+$('fext').value+' sau khi tải.';
+      },function(e2){
+        if(e2&&e2.code==='declined'){$('cm').textContent='Đã huỷ tải.';return}
+        saveAnchor(blob,name);
+      });
+      return;
+    }
+    saveAnchor(blob,name);
+  });
+  });
+});
+$('copy').addEventListener('click',function(){
+  var ta=$('out');if(!ta.value){$('cm').textContent='Chưa có mã để sao chép.';return}
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(ta.value).then(function(){$('cm').textContent='Đã sao chép.'},legacyCopy);
+  }else legacyCopy();
+  function legacyCopy(){
+    var ok=false;
+    try{ta.focus();ta.setSelectionRange(0,ta.value.length);ok=document.execCommand('copy')}catch(e){}
+    $('cm').textContent=ok?'Đã sao chép.':'Hãy bấm giữ vào ô mã rồi chọn Copy.';
+  }
+});
+/* Gửi file qua ứng dụng khác (điện thoại) */
+(function(){
+  var btn=$('share');
+  if(!navigator.share)return;
+  btn.style.display='';
+  btn.addEventListener('click',function(){
+    var t=$('out').value;if(!t){$('cm').textContent='Chưa có mã để gửi.';return}
+    t=t.replace(/\r?\n/g,'\r\n')+'\r\n';
+    var name=outName();
+    try{
+      var file=new File([t],name,{type:'text/plain'});
+      if(navigator.canShare&&navigator.canShare({files:[file]})){
+        navigator.share({files:[file],title:name}).then(function(){$('cm').textContent='Đã gửi '+name+'.'},function(){});
+        return;
+      }
+    }catch(e){}
+    navigator.share({title:name,text:t}).then(function(){$('cm').textContent='Đã gửi mã.'},function(){});
+  });
+})();
+loadOpts();syncDlLabel();$('fext').addEventListener('change',syncDlLabel);
+/* Chạy được khi mất mạng + cài ra màn hình chính */
+if('serviceWorker' in navigator&&location.protocol==='https:'){
+  window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js')['catch'](function(){})});
+}
+</script>
+</body>
+</html>
